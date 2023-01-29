@@ -1,0 +1,473 @@
+/**
+  ******************************************************************************
+  * @file    TIM/TIM_TimeBase/Src/main.c
+  * @author  MCD Application Team
+  * @version V1.4.0
+  * @date    26-February-2016
+  * @brief   This sample code shows how to use STM32L4xx TIM HAL API to generate
+  *          a time base of one second with the corresponding Interrupt request.
+  ******************************************************************************
+  * @attention
+  *
+  * <h2><center>&copy; COPYRIGHT(c) 2016 STMicroelectronics</center></h2>
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "sys_init.h"
+#include "uart.h"
+#include "sys_func.h"
+
+/** @addtogroup STM32L4xx_HAL_Examples
+  * @{
+  */
+
+/** @addtogroup TIM_TimeBase
+  * @{
+  */
+
+/* Private typedef -----------------------------------------------------------*/
+enum STATE{IDLE, CTRL, COM};
+enum MODE{TEST=0, MANUAL, AUTOMATIC};
+char* SysState[3]={"IDLE","CONTROL","COMMUNICATION"};
+char* SysMode[3]={"TEST","MANUAL","AUTOMATIC"};
+int mode,state=CTRL;
+
+/* Private define ------------------------------------------------------------*/
+extern TIM_HandleTypeDef    TimHandle_int;
+extern TIM_HandleTypeDef    TimHandle_Enc1;
+extern TIM_HandleTypeDef    TimHandle_Enc2;
+extern TIM_HandleTypeDef    TimHandle_Enc3;
+extern TIM_HandleTypeDef    TimHandle_Enc4;
+/* Private macro -------------------------------------------------------------*/
+/* Private variables ---------------------------------------------------------*/
+
+uint32_t ExitStandBy = RESET;
+extern int SerialReceiveReady;
+extern uint32_t previous_demand,demand;
+extern char isDemandChanged; 
+int32_t offset=0;
+int32_t speed=0,speed_count=0,local_time_ms=0,lut_index=0;
+uint32_t override=0;
+extern double tOn1, tOn2, pOn1, pOn2, pS1, pS2,pS;
+extern float PBC_PCC,TBC_PCC;
+extern char isDemandChanged, dir, control;
+extern uint32_t SelectMotor;
+extern int32_t error;
+extern uint32_t local_demand;
+extern uint32_t local_time;
+char is_High;
+extern uint8_t iteration;
+extern int pulse;
+
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+
+
+/* Private functions ---------------------------------------------------------*/
+
+/**
+  * @brief  Main program
+  * @param  None
+  * @retval None
+  */
+int main(void)
+{
+  /* STM32L4xx HAL library initialization:
+       - Configure the Flash prefetch
+       - Systick timer is configured by default as source of time base, but user 
+         can eventually implement his proper time base source (a general purpose 
+         timer for example or other time source), keeping in mind that Time base 
+         duration should be kept 1ms since PPP_TIMEOUT_VALUEs are defined and 
+         handled in milliseconds basis.
+       - Set NVIC Group Priority to 4
+       - Low Level Initialization
+     */
+	#ifdef DEBUG_MODE
+	#warning THE CODE IS RUNNING IN DEBUG MODE!!!
+	#endif
+	
+  HAL_Init();
+		
+  /* Configure LED2 */
+  BSP_LED_Init(LED2);
+
+  /* Configure the system clock to 144 MHz */
+  SystemClock_Config();
+
+	/* Configure RTC, UART, POWER MODULE, 
+		 Encoder, Timer and other system peripherals */
+	System_Initialise();
+	mode = MANUAL;
+	#ifdef DEBUG_MODE
+		state = CTRL;
+	#else
+		state = IDLE;
+	#endif
+	
+  while (1)
+  {
+		if (state == IDLE)
+			/* Enter StandBy Mode*/
+			EnterStandByMode();				
+		
+		if(ExitStandBy)
+			/* Exit StandBy Mode*/
+			ExitStandByMode();
+		
+		if(SerialReceiveReady)
+			/* Serial Receive */
+			serial_receive();
+				
+		if(isDemandChanged)
+			/* Take action when demand is changed */
+			DemandChanged();
+		
+		if(previous_demand != demand)
+			/* Update new demand */
+			UpdateDemand();
+		
+			
+  }
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if(htim == &TimHandle_Enc1)
+	{
+		if(__HAL_TIM_GET_COUNTER(&TimHandle_Enc1) < 7200 )
+			Motor[A].TempVar.factor++;
+		else
+			Motor[A].TempVar.factor--;
+	}
+	
+	if(htim == &TimHandle_Enc2)
+	{
+		if(__HAL_TIM_GET_COUNTER(&TimHandle_Enc2) < 7200 )
+			Motor[B].TempVar.factor++;
+		else
+			Motor[B].TempVar.factor--;
+	}
+	
+	if(htim == &TimHandle_Enc3)
+	{
+		if(__HAL_TIM_GET_COUNTER(&TimHandle_Enc3) < 7200 )
+			Motor[C].TempVar.factor++;
+		else
+		Motor[C].TempVar.factor--;
+	}
+	
+	if(htim == &TimHandle_Enc4)
+	{
+		if(__HAL_TIM_GET_COUNTER(&TimHandle_Enc4) < 7200 )
+			Motor[D].TempVar.factor++;
+		else
+			Motor[D].TempVar.factor--;
+	}
+	
+	if(htim == &TimHandle_int)
+	{
+
+//			present_encoder_count = __HAL_TIM_GET_COUNTER(&TimHandle_Enc1);
+//			if(dir == REV && present_encoder_count >= 14400)
+//			{
+//				present_encoder_count -= 14400;
+//				override = 1;
+//			}
+			local_time++;
+
+//----------------------------------Get Position---------------------------------------------------------//		
+			for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+			{
+				if(Motor[SelectMotor].MemVar.isAlive)
+					/* Get the present encoder count for the motor */
+					Motor[SelectMotor].getFunc(P);
+			}
+//------------------------------------Get Speed------------------------------------------------------//			
+			if(local_time%10==0)  /*Take speed every 10ms*/
+			{
+				for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+				{
+					if(Motor[SelectMotor].MemVar.isAlive)
+						/* Get the present encoder count for the motor */
+						Motor[SelectMotor].getFunc(S);
+				}
+			} 		
+//--------------------------------- Speed Count -------------------------------------------------------//			
+			for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+			{
+				if(Motor[SelectMotor].MemVar.isAlive && (Motor[SelectMotor].Data.Rotation) == RESET && Motor[SelectMotor].Data.Speed == 0 )
+					Motor[SelectMotor].TempVar.SpeedCount ++;
+				else
+					Motor[SelectMotor].TempVar.SpeedCount = 0;
+			}
+			
+			for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+			{
+					if(Motor[SelectMotor].MemVar.isAlive == RESET)
+						Motor[SelectMotor].TempVar.SpeedCount = 10;
+			}
+//--------------------------------------------------------------------------------------------------//					
+			
+			if(	Motor[0].TempVar.SpeedCount >= 10 && 
+					Motor[1].TempVar.SpeedCount >= 10 && 
+					Motor[2].TempVar.SpeedCount >= 10 && 
+					Motor[3].TempVar.SpeedCount >= 10 )
+				{
+					speed_count = SET;
+//					/* Wait for 10ms after speed becomes 0 ie., until the motor settles */
+//					if(speed == 0)
+//						speed_count++;		// If speed is 0, increment speed count
+//					else
+//						speed_count = RESET;	// Else reset speed count 
+				}
+						
+			for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+			{
+				if(Motor[SelectMotor].MemVar.isAlive)
+				{
+					
+					/* If control is PBC, turn off the motor when the present_encoder_count is greater than or equal to pOn */
+					if(Motor[SelectMotor].Data.Control == PBC && ((Motor[SelectMotor].Data.Direction == POS && Motor[SelectMotor].Data.Position >= Motor[SelectMotor].Data.pOn) 
+								|| (Motor[SelectMotor].Data.Direction == REV && Motor[SelectMotor].Data.Position <= Motor[SelectMotor].Data.pOn)))
+						Motor[SelectMotor].StopMotor();
+					
+					/* If control is TBC, turn off the motor when the local_time is greater than or equal to tOn */
+					if(Motor[SelectMotor].Data.Control == TBC && local_time >= Motor[SelectMotor].Data.tOn)
+						Motor[SelectMotor].StopMotor();
+				}
+			}
+//------------------------------------------------------------------------------------------------------------------//
+				for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+				{
+					if(Motor[SelectMotor].MemVar.isAlive == RESET)
+						Motor[SelectMotor].TempVar.isHigh = SET;
+					if(Motor[SelectMotor].MemVar.isAlive)
+					{
+						if( Motor[SelectMotor].Data.Rotation == RESET )
+							Motor[SelectMotor].TempVar.isHigh = SET; 		// Calculate PBC_PCC for adaptation
+					}
+				}
+			
+			if(	Motor[A].TempVar.isHigh == SET && 
+					Motor[B].TempVar.isHigh == SET && 
+					Motor[C].TempVar.isHigh == SET && 
+					Motor[D].TempVar.isHigh == SET)
+					is_High=SET;
+			
+			/* Wait until motor settles */
+			if((speed_count) && (is_High)) // If the control was PBC, calculate PBC_PCC for adaptation
+			{		
+				if(is_High)
+				{
+					for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+					{
+						if(Motor[SelectMotor].MemVar.isAlive)
+						{  
+							Motor[SelectMotor].Data.Error = Motor[SelectMotor].Data.Demand -  Motor[SelectMotor].Data.Position;
+							if((Motor[SelectMotor].Data.Control == PBC) && (absolute_int(Motor[SelectMotor].Data.Error) != 0))
+								Motor[SelectMotor].MemVar.Pcc_Pbc = (((float)Weight1*Motor[SelectMotor].MemVar.Pcc_Pbc)+((float)Weight2*Motor[SelectMotor].MemVar.Pcc_Pbc*((float)Motor[SelectMotor].Data.Demand/(float)(absolute_int(Motor[SelectMotor].Data.Error)))))/((float)Weight1+(float)Weight2);
+					
+							if((Motor[SelectMotor].Data.Control == TBC && (absolute_int(Motor[SelectMotor].Data.Error)) != 0 && Motor[SelectMotor].Data.Demand > 20) &&(absolute_int(Motor[SelectMotor].Data.Error) != 0))
+								Motor[SelectMotor].MemVar.Pcc_Tbc = (((float)Weight1*Motor[SelectMotor].MemVar.Pcc_Tbc)+((float)Weight2*Motor[SelectMotor].MemVar.Pcc_Tbc*((float)Motor[SelectMotor].Data.Demand/(float)(absolute_int(Motor[SelectMotor].Data.Error)))))/((float)Weight1+(float)Weight2);
+							is_High = RESET;
+						}
+					}	
+				}
+//-------------------------------------------------------------------------------------------------------------//				
+				for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+				{
+					if(Motor[SelectMotor].MemVar.isAlive && Motor[SelectMotor].Data.Demand <= Tolerance)	
+					{	
+						Motor[SelectMotor].TempVar.isComplete= SET;
+							
+						#ifdef DEBUG_MODE
+						for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+							{
+								sprintf(dispvar,"\n Motor Number = %d \n Demand = %d \n Final Position = %d \n Error = %d\n Itearations = %d", SelectMotor+1, Motor[SelectMotor].Data.Demand , Motor[SelectMotor].Data.Position, Motor[SelectMotor].Data.Error, iteration);
+								serial_printf(); 
+							}
+						#endif
+					}
+				}
+				
+			
+			if(	Motor[A].TempVar.isComplete == SET && 
+					Motor[B].TempVar.isComplete == SET && 
+					Motor[C].TempVar.isComplete == SET && 
+					Motor[D].TempVar.isComplete == SET)
+			{
+				/* Stop timer interrupt */				
+				HAL_TIM_Base_Stop(&TimHandle_int);
+				HAL_TIM_Base_Stop_IT(&TimHandle_int);
+//				demand = 0;
+//			  previous_demand = 0;
+				speed_count = RESET;
+				for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+				{
+					Motor[SelectMotor].TempVar.SpeedCount = RESET;
+					Motor[SelectMotor].MemVar.PreError = Motor[SelectMotor].Data.Error ;
+				}	
+				  
+				// enter idle state
+			}
+		
+				for(SelectMotor=0;SelectMotor < MotorMax ;SelectMotor++)
+				{
+					if(Motor[SelectMotor].MemVar.isAlive && Motor[SelectMotor].TempVar.isComplete == RESET)
+					{
+						if(Motor[SelectMotor].Data.Demand <= TBC_THRESHOLD)		// If error is less than threshold, use Time Based Control			
+							Motor[SelectMotor].Data.Control = TBC;
+						else  														// If error is greater than threshold, use Position Based Control
+							Motor[SelectMotor].Data.Control = PBC;
+						
+						local_time = RESET;
+						isDemandChanged = SET;
+						
+						/* Set direction depending on the sign of the error */
+						if(Motor[SelectMotor].Data.Error < 0)
+							Motor[SelectMotor].Data.Direction = REV;
+						else
+							Motor[SelectMotor].Data.Direction = POS;
+					}
+				}
+			}
+			
+				
+				/* Disable Timer Interrupt */
+				HAL_TIM_Base_Stop(&TimHandle_int);
+//				demand = 0;
+//			  previous_demand = 0;
+				/* Reset Speed count*/
+				
+			
+			}
+		
+		
+			
+			
+			
+//			if(override == 1)
+//			{
+//				dir = POS;
+//				override = 0;
+//			}
+}
+
+/**
+  * @brief  System Clock Configuration
+  *         The system Clock is configured as follows :
+  *            System Clock source            = PLL (MSI)
+  *            SYSCLK(Hz)                     = 144 MHz
+  *            HCLK(Hz)                       = 144 MHz
+  *            AHB Prescaler                  = 1
+  *            APB1 Prescaler                 = 1
+  *            APB2 Prescaler                 = 1
+  *            MSI Frequency(Hz)              = 48 MHz
+  *            PLL_M                          = 1
+  *            PLL_N                          = 6
+  *            PLL_R                          = 2
+  *            PLL_P                          = 7
+  *            PLL_Q                          = 4
+  *            Flash Latency(WS)              = 4
+  * @param  None
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+
+  /* MSI is enabled after System reset, activate PLL with MSI as source */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.MSIState = RCC_MSI_ON;
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_11;
+  RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 6;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  RCC_OscInitStruct.PLL.PLLP = 7;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if(HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    /* Initialization Error */
+    while(1);
+  }
+  
+  /* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2 
+     clocks dividers */
+  RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;  
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;  
+  if(HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    /* Initialization Error */
+    while(1);
+  }
+}
+
+#ifdef  USE_FULL_ASSERT
+
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+
+  /* Infinite loop */
+  while (1)
+  {
+  }
+}
+
+#endif
+
+/**
+  * @}
+  */
+
+/**
+  * @}
+  */
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

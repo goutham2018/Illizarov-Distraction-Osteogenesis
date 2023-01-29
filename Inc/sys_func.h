@@ -1,0 +1,24 @@
+#ifndef __SYS_FUNC__
+#define __SYS_FUNC__
+
+#include "main.h"
+#include "sys_init.h"
+#include "motor_func.h"
+#include "pin_config.h"
+
+#define MotorMax 4
+#define Tolerance 12
+
+#define A 0
+#define B 1
+#define C 2
+#define D 3
+
+void EnterStandByMode(void);
+void ExitStandByMode(void);
+void UpdateDemand(void);
+void DemandChanged(void);
+uint32_t absolute_int(int32_t number);
+void StringCopy(uint64_t *dest, uint64_t *src, uint32_t start, uint32_t count);
+
+#endif

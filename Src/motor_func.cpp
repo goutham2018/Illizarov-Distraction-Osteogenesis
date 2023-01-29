@@ -1,0 +1,304 @@
+#include "motor_func.h"
+#include "flash.h"
+#include "uart.h"
+
+extern uint32_t SelectMotor;
+extern float PBC_PCC,TBC_PCC;
+extern uint64_t emk[EMK_Length][3];//, local_db[EMK_Length][3];
+extern uint32_t data_index2,data_index1;
+extern uint32_t demand;
+double tOn1=0, tOn2=0, pOn1=0, pOn2=0, pS1=0, pS2=0,pS =0;
+uint32_t pOn=0, tOn=0;
+uint32_t MotorDataAddr;
+/* Private typedef -----------------------------------------------------------*/
+extern GPIO_InitTypeDef  GPIO_InitStruct;
+extern TIM_Encoder_InitTypeDef Encoder;
+
+extern union Device_Details{
+	struct DeviceDetails{
+		uint64_t FirmwareID[10];
+		uint64_t No_of_Mot;
+		uint64_t ID[10];
+		uint64_t RTC_Data[7];
+		uint64_t BatStat;		
+	}Device;
+	uint64_t Buffer[11];
+}DeviceData;
+
+union datastore_u{
+	struct datastore_s{
+		int32_t var1;
+		int32_t var2;
+		int32_t var3;
+		int32_t var4;
+	}Store;
+	uint64_t dataBuffer[2];
+}MotorData;
+
+Motor_func Motor[4];	
+
+extern TIM_HandleTypeDef    TimHandle_int;
+extern TIM_HandleTypeDef    TimHandle_Enc1;
+extern TIM_HandleTypeDef    TimHandle_Enc2;
+extern TIM_HandleTypeDef    TimHandle_Enc3;
+extern TIM_HandleTypeDef    TimHandle_Enc4;
+
+void Motor_func :: Interpolate()
+{
+				/* Search the data base and get previous and immediate next data points */
+				for(data_index1=0;data_index1<EMK_Length;data_index1++)
+					if(emk[data_index1][2] > this->Data.Demand )
+					break;
+					
+		/*
+			 /\		|	.
+			/	 \	|
+			 ||		|
+			 ||		|
+		position|
+						|
+				 pS	|_________________________________________._._._._.
+						|  				        											 '
+						|				       												'
+						|				    												'
+						|				 													 '
+						|				 													'---------> dynamic positon of the motor 
+						|         	 									 	'
+						|			       									 '
+						|			     									 '
+						|		   	    								'
+						|_______________________ _'_________\ pOn
+						|	            					|						/
+						|		      						' |
+						|             	    ' 	|
+						|          		    '    	|-----> pulse to turn on the motor 	
+						|	    				'       	|
+						|      		 '           	|
+						|   	 '              	|
+						|		'                  	|
+						|_______________________|_____________________________
+						|<---------tOn--------->|											 t->
+					
+					pOn -> motor position at the moment when pulse is turned off
+					tOn -> duration for which motor is turned on 
+					pS  -> motor settling position
+		*/
+				/* Get previous values for interpolation */
+				tOn1 = (double)(emk[data_index1-1][0]) ; 	// Previous tOn
+				tOn2 = (double)(emk[data_index1][0])   ;	 	// Next tOn
+				pOn1 = (double)(emk[data_index1-1][1]) ;		// Previous pOn
+				pOn2 = (double)(emk[data_index1][1])   ;		// Next pOn	
+				pS1  = (double)(emk[data_index1-1][2]) ;		// Previous pS
+				pS2  = (double)(emk[data_index1][2])   ;		// Next pS
+				
+				/* Interpolation */
+				this->Data.pOn  = (uint32_t)(pOn1 + (pOn2 - pOn1)*((((double)(this->Data.Demand)) - pS1)/(pS2 - pS1))); // Predict pOn
+				this->Data.tOn  = (uint32_t)(tOn1 + (tOn2 - tOn1)*((((double)(this->Data.Demand)) - pS1)/(pS2 - pS1)));	// Predict tOn
+				
+				/* Adaptation */
+				this->Data.pOn = (uint32_t)(((float)this->Data.pOn)*this->MemVar.Pcc_Pbc);
+				this->Data.tOn = (uint32_t)(((float)this->Data.tOn)*this->MemVar.Pcc_Tbc);			
+				
+				/* Define pOn depending on direction */
+				if(this->Data.Direction == POS)
+					this->Data.pOn = this->Data.Position + this->Data.pOn;
+				else
+					this->Data.pOn = this->Data.Position - this->Data.pOn;
+	
+}
+
+void Motor_func :: StartMotor()
+{
+	this->Data.Rotation  = SET;
+	switch (this->Data.Direction){
+		/* Depending on the direction, turn on the motor */
+		case POS:
+					/* Turn on the motor in CW direction */
+					HAL_GPIO_WritePin(this->Pin.Port1, this->Pin.p1, GPIO_PIN_SET );
+					HAL_GPIO_WritePin(this->Pin.Port2, this->Pin.p2, GPIO_PIN_RESET);
+					break;
+		
+		case REV:	
+					/* Turn on the motor in Anti-CW direction */
+					HAL_GPIO_WritePin(this->Pin.Port1, this->Pin.p1, GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(this->Pin.Port2, this->Pin.p2, GPIO_PIN_SET  );
+					break;
+			}
+}
+void Motor_func :: StopMotor()
+{
+	this->Data.Rotation  = RESET;
+	/* Turn off the motor */				
+	HAL_GPIO_WritePin(this->Pin.Port1, this->Pin.p1 , GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(this->Pin.Port2, this->Pin.p2 , GPIO_PIN_RESET);
+
+}
+
+void Motor_func :: getFunc(uint8_t param)
+{
+	if(param == P)
+		this->Data.Position = (this->TempVar.factor *14400) + __HAL_TIM_GET_COUNTER(this->TempVar.Enc_Handler);
+	
+	if(param == S)
+	{
+		this->Data.Position = (this->TempVar.factor *14400) + __HAL_TIM_GET_COUNTER(this->TempVar.Enc_Handler);
+		this->Data.Speed=this->Data.Position - this->TempVar.preEnc;
+		this->TempVar.preEnc= this->Data.Position;
+	}
+}
+
+void Motor_func :: ReadMem()
+{
+	if(flash_read(this->TempVar.MemAddr,2, MotorData.dataBuffer) != OK)
+	{
+		sprintf(errvar,"This is line %d of file %s (function %s)\n", __LINE__, __FILE__, __func__);
+		Error_Handler(402); // See "error codes.txt"
+	}	
+	this->MemVar.PreError =  (uint32_t)MotorData.Store.var1;
+	this->MemVar.Pcc_Pbc  =  (float)(MotorData.Store.var2/1000);
+	this->MemVar.Pcc_Tbc  =  (float)(MotorData.Store.var3/1000);	
+	this->MemVar.isAlive  =  (uint8_t)MotorData.Store.var4;
+}
+
+void Motor_func :: WriteMem()
+{
+
+	MotorData.Store.var1 = (int32_t)this->MemVar.PreError;
+	MotorData.Store.var2 = (int32_t)this->MemVar.Pcc_Pbc*1000;
+	MotorData.Store.var3 = (int32_t)this->MemVar.Pcc_Tbc*1000;
+	MotorData.Store.var4 = (int32_t)this->MemVar.isAlive;
+	
+	if(flash_write(this->TempVar.MemAddr,2, MotorData.dataBuffer,0) != OK)
+	{
+		sprintf(errvar,"This is line %d of file %s (function %s)\n", __LINE__, __FILE__, __func__);
+    Error_Handler(401); // See "error codes.txt"
+  }	
+}
+
+void Motor_func :: EraseMem()
+{
+	if(flash_erase(this->TempVar.MemPageNo, 1) != OK)
+	{
+		sprintf(errvar,"This is line %d of file %s (function %s)\n", __LINE__, __FILE__, __func__);
+		Error_Handler(403); // See "error codes.txt"
+	}	
+}
+void Motor_func :: EncTimInit(TIM_HandleTypeDef* TimHandle_Enc, TIM_TypeDef* TIM, GPIO_TypeDef* EncPortA, uint32_t EncPinA, GPIO_TypeDef* EncPortB, uint32_t EncPinB , uint8_t AlternateFunc1, uint8_t AlternateFunc2)
+{
+	this->TempVar.Enc_Handler = TimHandle_Enc;
+	
+	/* Configure Encoders 
+	Encoder timers are configured at 100u second */	
+	Encoder.EncoderMode = TIM_ENCODERMODE_TI12;
+	Encoder.IC1Polarity = TIM_ICPOLARITY_RISING;
+	Encoder.IC2Polarity = TIM_ICPOLARITY_RISING;
+	Encoder.IC1Selection=TIM_ICSELECTION_DIRECTTI;
+	Encoder.IC2Selection=TIM_ICSELECTION_DIRECTTI;
+	Encoder.IC1Prescaler=TIM_ICPSC_DIV1;
+	Encoder.IC2Prescaler=TIM_ICPSC_DIV1;
+
+
+	/*------------------------ Encoder ------------------------------*/
+	/* Encoder Timer Configuration */
+	TimHandle_Enc->Instance = TIM;
+	TimHandle_Enc->Init.Period            = 14400;
+	TimHandle_Enc->Init.Prescaler         = 0;
+	TimHandle_Enc->Init.CounterMode       = TIM_COUNTERMODE_UP;				
+	if (HAL_TIM_Encoder_Init(this->TempVar.Enc_Handler, &Encoder) != HAL_OK){
+		sprintf(errvar,"This is line %d of file %s (function %s)\n", __LINE__, __FILE__, __func__);
+		/* Starting Error */
+		Error_Handler(301); // See "error codes.txt"
+	}
+
+	if (HAL_TIM_Encoder_Init(this->TempVar.Enc_Handler, &Encoder) != HAL_OK)
+	{
+		/* Starting Error */
+		Error_Handler(304); // See "error codes.txt"
+	}
+	HAL_TIM_Encoder_Start(this->TempVar.Enc_Handler,TIM_CHANNEL_ALL);
+	__HAL_TIM_ENABLE_IT(this->TempVar.Enc_Handler, TIM_IT_UPDATE);
+
+	/* Reset Encoder Count */
+	__HAL_TIM_SET_COUNTER(this->TempVar.Enc_Handler,0);
+	
+	/* Encoder GPIO Configuration */
+	GPIO_Init(EncPortA ,EncPinA ,GPIO_MODE_AF_OD,GPIO_PULLUP,GPIO_SPEED_FREQ_VERY_HIGH, AlternateFunc1);
+	GPIO_Init(EncPortB ,EncPinB ,GPIO_MODE_AF_OD,GPIO_PULLUP,GPIO_SPEED_FREQ_VERY_HIGH, AlternateFunc2);
+	
+}
+
+
+void motor_init(void)
+{
+	/* Check no of motors */
+	for(SelectMotor = 0 ; SelectMotor < DeviceData.Device.No_of_Mot ; SelectMotor++)
+		Motor[SelectMotor].MemVar.isAlive = SET;
+	for(SelectMotor = DeviceData.Device.No_of_Mot ; SelectMotor < MotorMax ; SelectMotor++)
+		{
+			Motor[SelectMotor].MemVar.isAlive = RESET;
+		
+		}
+	for(SelectMotor=0 ; SelectMotor < MotorMax ; SelectMotor++)
+	{
+		Motor[SelectMotor].MemVar.PreError 	= 0;
+		Motor[SelectMotor].MemVar.Pcc_Pbc 	= 1;
+		Motor[SelectMotor].MemVar.Pcc_Tbc 	= 1;
+		Motor[SelectMotor].SetAddr();
+		Motor[SelectMotor].EraseMem();
+		Motor[SelectMotor].WriteMem();
+	}		
+}
+
+void Motor_func :: EnableIRQ(void)
+{
+switch (SelectMotor){
+		case A:
+			HAL_NVIC_EnableIRQ(TIM2_IRQn);
+			HAL_NVIC_SetPriority(TIM2_IRQn, 3, 0);
+			break;
+		case B:
+			HAL_NVIC_EnableIRQ(TIM3_IRQn);
+			HAL_NVIC_SetPriority(TIM3_IRQn, 3, 0);
+			break;
+		case C:
+			HAL_NVIC_EnableIRQ(TIM4_IRQn);
+			HAL_NVIC_SetPriority(TIM4_IRQn, 3, 0);
+			break;
+		case D:
+			HAL_NVIC_EnableIRQ(TIM5_IRQn);
+			HAL_NVIC_SetPriority(TIM5_IRQn, 3, 0);
+			break;	
+	}
+}
+
+void Motor_func :: SetAddr(void)
+{
+
+	switch (SelectMotor){
+			case A:
+				Motor[SelectMotor].TempVar.MemAddr 		= MOTOR_1_DATA_BACKUP_ADDR;
+				Motor[SelectMotor].TempVar.MemPageNo 	=	MOTOR_1_DATA_BACKUP_PAGE_NO;
+				break;
+			case B:
+				Motor[SelectMotor].TempVar.MemAddr 		= MOTOR_2_DATA_BACKUP_ADDR;
+				Motor[SelectMotor].TempVar.MemPageNo 	= MOTOR_2_DATA_BACKUP_PAGE_NO;
+				break;
+			case C:
+				Motor[SelectMotor].TempVar.MemAddr 		= MOTOR_3_DATA_BACKUP_ADDR;
+				Motor[SelectMotor].TempVar.MemPageNo 	= MOTOR_3_DATA_BACKUP_PAGE_NO;
+				break;
+			case D:
+				Motor[SelectMotor].TempVar.MemAddr 		= MOTOR_4_DATA_BACKUP_ADDR;
+				Motor[SelectMotor].TempVar.MemPageNo 	= MOTOR_4_DATA_BACKUP_PAGE_NO;	
+				break;	
+		}
+}
+
+void motor_pin_config(void)
+{
+	Motor[A] = Motor_func(MOTOR_1_PORT_1,  MOTOR_1_PORT_2,  MOTOR_1_PIN_A,  MOTOR_1_PIN_B);
+	Motor[B] = Motor_func(MOTOR_2_PORT_1,  MOTOR_2_PORT_2,  MOTOR_2_PIN_A,  MOTOR_2_PIN_B);
+	Motor[C] = Motor_func(MOTOR_3_PORT_1,  MOTOR_3_PORT_2,  MOTOR_3_PIN_A,  MOTOR_3_PIN_B);
+	Motor[D] = Motor_func(MOTOR_4_PORT_1,  MOTOR_4_PORT_2,  MOTOR_4_PIN_A,  MOTOR_4_PIN_B);
+}
+

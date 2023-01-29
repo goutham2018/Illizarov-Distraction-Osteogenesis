@@ -1,0 +1,22 @@
+Error Code	Operation
+101	UART de-init failed
+102	UART init failed
+103	UART Rx IT config failed
+  1031	(Rx callback function)
+  1032	(Reset Rx IT Func)
+104	UART Error callback
+105	UART Tx IT
+201	RTC init failed
+202	RTC Osc config failed
+203	RTC LSE clk config failed
+204	RTC LSI clk config failed
+205 RTC test failed
+301	Encoder init failed
+302	EMK flash read failed
+303 Device data read failed
+305	Timer init failed
+401	Motor data flash write failed (check if flash is erased before flash write)
+402	Motor data flash read failed
+403	Motor data flash erase failed
+501 Exit Test Mode to proceed
+502 Exit Automatic Mode to proceed

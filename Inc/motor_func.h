@@ -1,0 +1,68 @@
+#ifndef __MOT_FUNC__
+#define __MOT_FUNC__
+#include "main.h"
+//#include "iostream"
+#include "sys_func.h"
+
+
+class Motor_func{
+		public:
+			TIM_HandleTypeDef    TimHandle_Enc;
+			struct MotorPins{
+				GPIO_TypeDef* Port1;
+				GPIO_TypeDef* Port2;
+				uint32_t p1;
+				uint32_t p2;
+			}Pin;
+			struct MemVariables{
+				uint8_t isAlive;
+				int32_t	PreError;
+				float Pcc_Pbc;
+				float Pcc_Tbc;
+			}MemVar;
+			struct MotorDetail{
+				int32_t Demand;
+				uint8_t Rotation;
+				uint8_t Direction;
+				int32_t Position;
+				int32_t Speed;
+				uint8_t Control;
+				uint32_t pOn;
+				uint32_t tOn;
+				int32_t Error;
+			}Data;
+			struct TempVariables{
+				int32_t preEnc;
+				uint8_t isComplete;
+				TIM_HandleTypeDef* Enc_Handler;
+				uint32_t MemAddr;
+				uint32_t MemPageNo;
+				uint32_t SpeedCount;
+				uint8_t isHigh;
+				uint16_t factor;
+			}TempVar;
+			Motor_func(GPIO_TypeDef* port1=GPIOA, GPIO_TypeDef* port2=GPIOA, uint32_t pin1=0,uint32_t pin2=0){
+					Pin.Port1	=	port1; 
+					Pin.Port2	=	port2; 
+					Pin.p1 		= pin1;
+					Pin.p2 		= pin2;
+					GPIO_Init(Pin.Port1 ,Pin.p1 , GPIO_MODE_OUTPUT_OD, GPIO_NOPULL, GPIO_SPEED_FREQ_VERY_HIGH, NULL);
+					GPIO_Init(Pin.Port2 ,Pin.p2 , GPIO_MODE_OUTPUT_OD, GPIO_NOPULL, GPIO_SPEED_FREQ_VERY_HIGH, NULL);
+			}
+			void Interpolate();
+			void getFunc(uint8_t param);
+			void StartMotor();
+			void StopMotor();
+			void ReadMem();
+			void WriteMem();
+			void EraseMem();
+			void SetAddr();
+			void EnableIRQ();
+			void EncTimInit(TIM_HandleTypeDef* ,TIM_TypeDef * ,GPIO_TypeDef* , uint32_t ,GPIO_TypeDef* , uint32_t, uint8_t, uint8_t );
+	};
+
+extern Motor_func Motor[4];
+	
+void motor_init(void);	
+void motor_pin_config(void);
+#endif //__MOT_FUNC__

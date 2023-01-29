@@ -1,0 +1,6 @@
+void Motor_func :: updatePCC();
+void Motor_func :: StartMotor();
+void Motor_func :: StopMotor();
+void Motor_func :: ReadMem();
+void Motor_func :: WriteMem();
+void Motor_func :: Motor_func();
